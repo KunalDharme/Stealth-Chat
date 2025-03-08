@@ -1,10 +1,27 @@
 import threading
+import ssl
 import socket
 import colorama
+import logging
+import os
 from colorama import Fore, Back, Style
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
+BANS_FILE = os.path.join(BASE_DIR, "data", "bans.txt")
+
+CERTS_DIR = os.path.join(BASE_DIR, "certs")
+CERT_FILE = os.path.join(CERTS_DIR, "server.crt")
+KEY_FILE = os.path.join(CERTS_DIR, "server.key")
+
+logging.basicConfig(level=logging.INFO)
 
 # Initialize colorama for colored terminal output
 colorama.init(autoreset=True)
+
+SERVER_CERT = os.path.join(CERTS_DIR, "server.crt")
+SERVER_KEY = os.path.join(CERTS_DIR, "server.key")   #server private key
+SERVER_CONTEXT = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+SERVER_CONTEXT.load_cert_chain(certfile=SERVER_CERT, keyfile=SERVER_KEY)
 
 # Define server host and port
 host = '127.0.0.1'  # localhost
@@ -41,7 +58,7 @@ def handle(client):
                     nicknames.pop(index)
                     broadcast((Fore.YELLOW + f"{nickname} left the chat!" + Style.RESET_ALL).encode('ascii'))
                     print(Fore.YELLOW + f"{nickname} disconnected.")
-                    client.close()
+                client.close()
                 break # exit the loop
 
             elif msg.startswith('KICK '):
@@ -54,7 +71,7 @@ def handle(client):
                 if nicknames[clients.index(client)] == 'admin':
                     name_to_ban = msg[4:]
                     kick_user(name_to_ban)
-                    with open('bans.txt', 'a') as f:
+                    with open(BANS_FILE, 'a') as f:
                         f.write(f'{name_to_ban}\n')
                     print(Fore.RED + f'{name_to_ban} was banned!')
                 else:
@@ -65,59 +82,69 @@ def handle(client):
 
         except:
             if client in clients:
-                index = clients.index(client)
-                clients.remove(client)
-                client.close()
-                nickname = nicknames.pop(index)
-                broadcast((Fore.YELLOW + f"{nickname} left the chat!").encode('ascii'))
-                break
+                try:
+                    index = clients.index(client)
+                    clients.remove(client)
+                    client.close()
+                    nickname = nicknames.pop(index)
+                    broadcast((Fore.YELLOW + f"{nickname} left the chat!").encode('ascii'))
+                except ValueError:
+                    pass #client was already removed
 
 def receive():
     """Accept new client connections."""
     try:
         while True:
             client, address = server.accept()
+            secure_client = SERVER_CONTEXT.wrap_socket(client, server_side=True)
+
             print(Fore.GREEN + f"Connected with {str(address)}")
 
-            client.send('NICK'.encode('ascii'))
-            nickname = client.recv(1024).decode('ascii')
+            secure_client.send('NICK'.encode('ascii'))
+            nickname = secure_client.recv(1024).decode('ascii')
 
             try:
-                with open('bans.txt', 'r') as f:
+                with open(BANS_FILE, 'r') as f:
                     bans = f.readlines()
             except FileNotFoundError:
                 bans = []
 
-            if nickname + '\n' in bans:
-                client.send('BAN'.encode('ascii'))
-                client.close()
+            if nickname in [ban.strip() for ban in bans]:
+                secure_client.send('BAN'.encode('ascii'))
+                secure_client.close()
                 continue
 
             if nickname == 'admin':
-                client.send('PASS'.encode('ascii'))
-                password = client.recv(1024).decode('ascii')
+                secure_client.send('PASS'.encode('ascii'))
+                password = secure_client.recv(1024).decode('ascii')
 
                 if password != 'password':
-                    client.send('REFUSE'.encode('ascii'))
-                    client.close()
+                    secure_client.send('REFUSE'.encode('ascii'))
+                    secure_client.close()
                     continue
 
             nicknames.append(nickname)
-            clients.append(client)
+            clients.append(secure_client)
 
             print(Fore.BLUE + f"Nickname of the client is {nickname}!")
             broadcast((Fore.GREEN + f"{nickname} joined the chat!").encode('ascii'))
-            client.send((Back.YELLOW + Fore.BLACK + "Connected to the server!").encode('ascii'))
+            secure_client.send((Back.YELLOW + Fore.BLACK + "Connected to the server!").encode('ascii'))
 
-            thread = threading.Thread(target=handle, args=(client,))
+            thread = threading.Thread(target=handle, args=(secure_client,), daemon=True)
             thread.start()
 
     except KeyboardInterrupt:
         print(Fore.RED + "\nServer shutting down..")
-        for client in clients:
-            client.send("SERVER_SHUTDOWN".encode('ascii'))
+        logging.info("server is shutting down...")
+
+        for client in clients[:]:   #Iterate over a copy to prevent modification issues
+            try:
+                client.send(Fore.RED + "SERVER_SHUTDOWN".encode('ascii'))
+            except:
+                pass    #ignore errors if the client is already disconnected
             client.close()
         server.close()
+        logging.info("Server successfully shut down.")
         exit(0)
 
 def kick_user(name):
@@ -126,10 +153,17 @@ def kick_user(name):
         name_index = nicknames.index(name)
         client_to_kick = clients[name_index]
         clients.remove(client_to_kick)
-        client_to_kick.send((Fore.BLACK + Back.LIGHTRED_EX +'You were kicked by an admin!').encode('ascii'))
-        client_to_kick.close()
         nicknames.remove(name)
+
+        try:
+            client_to_kick.send((Fore.BLACK + Back.LIGHTRED_EX +'You were kicked by an admin!').encode('ascii'))
+            client_to_kick.close()
+        except:
+            pass    #ignore if already disconnected
+
         broadcast((Fore.RED + f'{name} was kicked by an admin!').encode('ascii'))
+    else:
+        print(Fore.YELLOW + f"Attemped to kick {name}, but they are not in the chat.")
 
 print(Fore.GREEN + "Server is listening...")
 receive()

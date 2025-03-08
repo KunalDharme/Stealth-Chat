@@ -1,0 +1,5 @@
+# External dependencies
+colorama
+
+# Minimum Python version (optional, adjust as needed)
+python>=3.6

@@ -1,0 +1,4 @@
+# Ignore SSL certificates and private keys (Highly sensitive)
+certs/
+*.crt
+*.key
