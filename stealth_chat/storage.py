@@ -8,8 +8,14 @@ from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-def derive_history_key(secret: str) -> bytes:
-    return hashlib.sha256(secret.encode("utf-8")).digest()
+def derive_history_key(secret: str, salt: bytes = b"stealth-chat-history-v1") -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        secret.encode("utf-8"),
+        salt,
+        200_000,
+        dklen=32,
+    )
 
 
 class EncryptedHistoryStore:

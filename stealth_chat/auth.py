@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import threading
 import time
 from collections import defaultdict, deque
@@ -11,8 +12,13 @@ from . import config
 from .protocol import validate_room_name
 
 
-def hash_room_secret(room_password: str) -> str:
-    return hashlib.sha256(room_password.encode("utf-8")).hexdigest()
+def derive_room_secret(room_password: str, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        room_password.encode("utf-8"),
+        salt,
+        200_000,
+    )
 
 
 @dataclass
@@ -53,7 +59,8 @@ class AuthRateLimiter:
 @dataclass
 class Room:
     name: str
-    secret_hash: str
+    salt: bytes
+    secret_hash: bytes
     members: set[str] = field(default_factory=set)
 
 
@@ -65,15 +72,15 @@ class RoomManager:
     def join(self, username: str, room_name: str, room_password: str) -> tuple[bool, list[str]]:
         if not validate_room_name(room_name):
             raise ValueError("Invalid room name")
-        room_secret = hash_room_secret(room_password)
         with self._lock:
             room = self._rooms.get(room_name)
             created = False
             if room is None:
-                room = Room(name=room_name, secret_hash=room_secret)
+                salt = os.urandom(16)
+                room = Room(name=room_name, salt=salt, secret_hash=derive_room_secret(room_password, salt))
                 self._rooms[room_name] = room
                 created = True
-            elif not hmac.compare_digest(room.secret_hash, room_secret):
+            elif not hmac.compare_digest(room.secret_hash, derive_room_secret(room_password, room.salt)):
                 raise PermissionError("Invalid room password")
             room.members.add(username)
             return created, sorted(room.members)
