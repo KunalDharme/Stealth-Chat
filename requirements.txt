@@ -1,2 +1,2 @@
-# External dependencies
 colorama
+cryptography

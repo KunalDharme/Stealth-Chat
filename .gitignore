@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+chat_history.db
+.pytest_cache/
