@@ -102,6 +102,7 @@ class ChatServer:
 
     def _handle_client(self, client_sock: socket.socket, addr: tuple[str, int]) -> None:
         ip = addr[0]
+        # Set a timeout for initial handshake/connect operations, but clear it after auth
         client_sock.settimeout(config.SOCKET_TIMEOUT)
         sock_file = client_sock.makefile("rb")
         session: ClientSession | None = None
@@ -155,12 +156,24 @@ class ChatServer:
                 self._sessions[client_sock] = session
                 self._user_to_sock[username] = client_sock
 
+            # After successful auth, switch the socket to blocking mode so socket timeouts don't
+            # spuriously close idle but otherwise healthy connections. We rely on application-level
+            # ping/pong if liveness detection is required.
+            try:
+                client_sock.settimeout(None)
+            except OSError:
+                # If we can't change timeout, continue — we'll still handle exceptions below
+                pass
+
             send_json(client_sock, cipher.encrypt_obj({"type": "auth_ok", "room": room, "users": self.rooms.users(room)}))
             self._broadcast_presence(room, "join", username)
 
             while not self._stop_event.is_set():
                 try:
                     frame = recv_json_line(sock_file)
+                except socket.timeout:
+                    # temporary inactivity — keep the connection open
+                    continue
                 except ConnectionError:
                     break
                 if frame.get("type") != "secure":
