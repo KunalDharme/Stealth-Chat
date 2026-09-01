@@ -153,6 +153,9 @@ class ChatClient:
                     break
                 payload = self.cipher.decrypt_obj(frame)
                 self._handle_payload(payload)
+            except socket.timeout:
+                # no data received within timeout; keep waiting instead of disconnecting
+                continue
             except (ConnectionError, OSError, ProtocolError, CryptoError) as exc:
                 print(f"Disconnected: {exc}")
                 self.stop_event.set()
