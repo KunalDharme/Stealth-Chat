@@ -85,6 +85,16 @@ class ChatClient:
                 max_messages=config.HISTORY_MAX_MESSAGES,
             )
 
+        # enable TCP keepalive at the OS level (best-effort)
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except OSError:
+            pass
+        # start periodic application-level pings to keep NAT/firewalls from dropping idle connections
+        self._keepalive_interval = 10.0
+        self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
+        self._keepalive_thread.start()
+
     def run(self) -> None:
         if self.sock is None or self.sock_file is None or self.cipher is None:
             raise RuntimeError("Client not connected")
@@ -218,23 +228,3 @@ class ChatClient:
         for row in reversed(rows):
             print(f"{row['created_at']} [{row['room']}] {row['sender']}: {row['text']}")
 
-
-def interactive_client() -> None:
-    username = input("Choose a username: ").strip()
-    room = input("Room name: ").strip() or "lobby"
-    room_password = input("Room password/invite code: ").strip()
-
-    try:
-        client = ChatClient(username=username, room=room, room_password=room_password)
-        client.connect()
-        client.run()
-    except Exception as exc:
-        print(f"Failed to start client: {exc}")
-        print(
-            f"Hint: verify server is running, TCP port {config.CHAT_PORT} and UDP discovery port {config.DISCOVERY_PORT} "
-            "are allowed by firewall."
-        )
-
-
-if __name__ == "__main__":
-    interactive_client()
