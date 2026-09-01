@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import time
 import uuid
 import base64
 from typing import Any
@@ -39,6 +40,7 @@ class ChatClient:
         logger.info("Connecting to %s:%s", self.host, self.port)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # keep a short timeout for handshake steps
         self.sock.settimeout(config.SOCKET_TIMEOUT)
         self.sock.connect((self.host, self.port))
         self.sock_file = self.sock.makefile("rb")
@@ -90,6 +92,13 @@ class ChatClient:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         except OSError:
             pass
+
+        # set socket to blocking mode for normal operation (clear timeout)
+        try:
+            self.sock.settimeout(None)
+        except OSError:
+            pass
+
         # start periodic application-level pings to keep NAT/firewalls from dropping idle connections
         self._keepalive_interval = 10.0
         self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
@@ -228,3 +237,17 @@ class ChatClient:
         for row in reversed(rows):
             print(f"{row['created_at']} [{row['room']}] {row['sender']}: {row['text']}")
 
+    def _keepalive_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                # application-level ping; server replies with pong
+                self._send_secure({"type": "ping"})
+            except Exception:
+                # ignore errors here — _recv_loop will handle disconnection
+                pass
+            # sleep in small increments so stop_event can break promptly
+            interval = self._keepalive_interval
+            waited = 0.0
+            while waited < interval and not self.stop_event.is_set():
+                time.sleep(0.5)
+                waited += 0.5
